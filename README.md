@@ -5,6 +5,7 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
 ![MCP server](https://img.shields.io/badge/MCP-server-8A2BE2)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 A small Postgres query runner that runs in your browser. Pick a database, write SQL, run it, and look at the query plan. It also has an MCP server, so AI agents can edit and run the same scripts while you watch.
 
@@ -141,3 +142,9 @@ pnpm test       # unit tests, plus database tests if Postgres is running on loca
 pnpm typecheck
 pnpm package    # makes release/psqlex-<version>.tar.gz
 ```
+
+## License
+
+psqlex is licensed under the [GNU AGPL-3.0](LICENSE). Copyright (C) 2026 Manwë.
+
+You can use, change and share it, including commercially. If you distribute a modified version, or run one as a service for other people, you must keep this copyright notice, say that you changed it, and publish your source code under the same license.

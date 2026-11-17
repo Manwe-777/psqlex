@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Small local Postgres query runner and explainer with a web UI and an MCP server",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "dev": "concurrently -k -n server,web \"tsx watch src/server/cli.ts serve\" \"vite\"",
     "build": "vite build && node scripts/build-server.mjs",
