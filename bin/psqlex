@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# psqlex launcher for macOS and Linux. Needs only Node.js 20.11+ and a release
+# (or checkout) of psqlex; runs on the bash 3.2 that macOS ships.
+set -euo pipefail
+
+usage() {
+  cat <<USAGE
+Usage: psqlex <command>
+
+  start     Start the web UI in the background and open it in the browser
+  stop      Stop the background server
+  restart   Stop, then start
+  status    Say whether the server is running, and where
+  open      Open the web UI in the browser
+  logs      Follow the server log
+  run       Run the server in the foreground (Ctrl-C stops it)
+  mcp       Run the MCP server over stdio, for agents
+  config    Print the path of the connections file
+  link      Put psqlex on your PATH (symlink in ~/.local/bin)
+
+Environment: PSQLEX_PORT (default 7457), PSQLEX_CONFIG, PSQLEX_HOST with PSQLEX_TOKEN.
+USAGE
+}
+
+# Follow symlinks (e.g. ~/.local/bin/psqlex) back to the real install.
+resolve_root() {
+  local src="${BASH_SOURCE[0]}" dir
+  while [ -L "$src" ]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+  done
+  cd -P "$(dirname "$src")/.." && pwd
+}
+
+ROOT="$(resolve_root)"
+BUNDLE="$ROOT/dist/psqlex.mjs"
+PORT="${PSQLEX_PORT:-7457}"
+export PSQLEX_PORT="$PORT"
+URL="http://psqlex.localhost:$PORT"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/psqlex"
+PID_FILE="$STATE_DIR/server.pid"
+LOG_FILE="$STATE_DIR/server.log"
+
+die() { echo "psqlex: $*" >&2; exit 1; }
+say() { echo "psqlex: $*" >&2; }
+
+check_node() {
+  command -v node >/dev/null 2>&1 || die "Node.js 20.11 or newer is required (https://nodejs.org)."
+  node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 20 || (a === 20 && b >= 11) ? 0 : 1)' \
+    || die "Node.js 20.11 or newer is required; found $(node -v)."
+}
+
+# A release ships dist/. In a git checkout, build when dist/ is missing or
+# older than the sources.
+ensure_bundle() {
+  if [ -d "$ROOT/src" ]; then
+    if [ ! -f "$BUNDLE" ] || [ -n "$(find "$ROOT/src" -type f -newer "$BUNDLE" | head -n 1)" ]; then
+      command -v pnpm >/dev/null 2>&1 || die "building from source needs pnpm (npm install -g pnpm)."
+      say "building…"
+      (cd "$ROOT" && pnpm install --frozen-lockfile >&2 && pnpm build >&2) || die "build failed; run 'pnpm install && pnpm build' in $ROOT"
+    fi
+  fi
+  [ -f "$BUNDLE" ] || die "$BUNDLE is missing; this install is incomplete."
+}
+
+# A process's command line: /proc on Linux (slim images have no ps), ps elsewhere.
+process_command() {
+  if [ -r "/proc/$1/cmdline" ]; then tr '\0' ' ' <"/proc/$1/cmdline"
+  else ps -p "$1" -o command= 2>/dev/null
+  fi
+}
+
+server_pid() {
+  [ -f "$PID_FILE" ] || return 1
+  local pid
+  pid="$(cat "$PID_FILE")"
+  # Make sure the pid still belongs to psqlex and was not reused.
+  if kill -0 "$pid" 2>/dev/null && process_command "$pid" | grep -q "psqlex.mjs"; then
+    echo "$pid"
+    return 0
+  fi
+  rm -f "$PID_FILE"
+  return 1
+}
+
+healthy() {
+  node -e 'fetch(process.argv[1]).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))' \
+    "http://127.0.0.1:$PORT/api/connections" 2>/dev/null
+}
+
+open_browser() {
+  if [ "$(uname)" = "Darwin" ]; then open "$URL"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1 &
+  else say "open $URL in your browser"
+  fi
+}
+
+start() {
+  check_node
+  ensure_bundle
+  if server_pid >/dev/null; then
+    say "already running at $URL"
+    return 0
+  fi
+  if healthy; then die "something else is already answering on port $PORT; set PSQLEX_PORT to use another port."; fi
+  mkdir -p "$STATE_DIR"
+  nohup node "$BUNDLE" serve >>"$LOG_FILE" 2>&1 &
+  echo $! >"$PID_FILE"
+  local i=0
+  until healthy; do
+    i=$((i + 1))
+    if ! server_pid >/dev/null || [ "$i" -ge 50 ]; then
+      tail -n 20 "$LOG_FILE" >&2 || true
+      die "the server did not start; full log in $LOG_FILE"
+    fi
+    sleep 0.2
+  done
+  say "running at $URL (log: $LOG_FILE)"
+}
+
+stop() {
+  local pid
+  if ! pid="$(server_pid)"; then
+    say "not running"
+    return 0
+  fi
+  kill "$pid"
+  local i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+  kill -0 "$pid" 2>/dev/null && kill -9 "$pid"
+  rm -f "$PID_FILE"
+  say "stopped"
+}
+
+case "${1:-}" in
+  start) start; [ "${2:-}" = "--no-open" ] || open_browser ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  status)
+    if pid="$(server_pid)"; then echo "running at $URL (pid $pid, config $(node "$BUNDLE" config-path))"
+    else echo "not running"; exit 3
+    fi ;;
+  open) server_pid >/dev/null || start; open_browser ;;
+  logs) mkdir -p "$STATE_DIR"; touch "$LOG_FILE"; exec tail -f "$LOG_FILE" ;;
+  run) check_node; ensure_bundle; exec node "$BUNDLE" serve ;;
+  mcp) check_node; ensure_bundle; exec node "$BUNDLE" mcp ;;
+  config) check_node; ensure_bundle; node "$BUNDLE" config-path ;;
+  link)
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$ROOT/bin/psqlex" "$HOME/.local/bin/psqlex"
+    say "linked $HOME/.local/bin/psqlex"
+    case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) say "add ~/.local/bin to your PATH to run 'psqlex' from anywhere" ;; esac ;;
+  -h | --help | help | "") usage ;;
+  *) usage >&2; exit 2 ;;
+esac

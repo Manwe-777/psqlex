@@ -1,0 +1,18 @@
+{
+  "projects": [
+    {
+      "name": "my-app",
+      "description": "docker compose up db",
+      "connections": [
+        { "name": "local", "url": "postgresql://postgres@localhost:5432/postgres" },
+        {
+          "name": "staging",
+          "url": "postgresql://readonly_user:${MY_APP_STAGING_PASSWORD}@staging-db.example.com:5432/app",
+          "readOnly": true
+        }
+      ]
+    }
+  ],
+  "mcp": { "allowWrites": false, "maxRows": 200 },
+  "ui": { "maxRows": 1000, "statementTimeoutMs": 60000 }
+}
